@@ -6,11 +6,11 @@ npm-debug.log
 .gitignore
 .DS_Store
 *.log
-src/
-scripts/
-tsconfig.json
 .vscode/
 .idea/
 gcp-oauth.keys.json
 tokens.json
 auth.log
+dist/
+.tmp-test/
+test/

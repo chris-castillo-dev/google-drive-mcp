@@ -1,0 +1,31 @@
+# Stage 1: Build
+FROM node:20-slim AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --ignore-scripts
+COPY src ./src
+COPY scripts ./scripts
+COPY tsconfig.json ./
+# Skip typecheck (memory-heavy), run esbuild directly
+RUN node scripts/build.js
+
+# Stage 2: Production
+FROM node:20-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production --ignore-scripts
+COPY --from=builder /app/dist ./dist
+COPY healthcheck.cjs ./
+
+# Create config directory
+RUN mkdir -p /config && chown -R node:node /config
+
+# Environment
+ENV NODE_ENV=production
+ENV GOOGLE_DRIVE_OAUTH_CREDENTIALS=/config/gcp-oauth.keys.json
+ENV GOOGLE_DRIVE_MCP_TOKEN_PATH=/config/tokens.json
+
+USER node
+EXPOSE 8000
+
+ENTRYPOINT ["node", "dist/index.js", "start", "--transport", "http", "--host", "0.0.0.0", "--port", "8000"]
