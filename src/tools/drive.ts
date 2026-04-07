@@ -223,6 +223,12 @@ const AuthTestFileAccessSchema = z.object({
   fileId: z.string().optional(),
 });
 
+const CreateGoogleDocFromHtmlSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  htmlContent: z.string().min(1, "HTML content is required"),
+  parentFolderId: z.string().optional(),
+});
+
 function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
   const scopeRaw = ctx.authClient?.credentials?.scope;
   if (!scopeRaw || typeof scopeRaw !== 'string') return [];
@@ -609,6 +615,19 @@ export const toolDefinitions: ToolDefinition[] = [
       },
       required: ["fileId"]
     }
+  },
+  {
+    name: "createGoogleDocFromHtml",
+    description: "Create a native Google Doc from HTML content. Headings, bold, lists, and tables in the HTML are preserved as native Google Docs formatting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Name of the Google Doc to create (without extension)" },
+        htmlContent: { type: "string", description: "HTML string to convert into a Google Doc" },
+        parentFolderId: { type: "string", description: "Parent folder ID or path (e.g. /Work/Reports). Defaults to Drive root." },
+      },
+      required: ["name", "htmlContent"],
+    },
   },
 ];
 
@@ -1784,6 +1803,55 @@ export async function handleTool(
           content: [{ type: 'text', text: `Auth access check failed:\n${JSON.stringify({ message }, null, 2)}` }],
           isError: true,
         };
+      }
+    }
+
+    case "createGoogleDocFromHtml": {
+      const validation = CreateGoogleDocFromHtmlSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+      const parentId = await ctx.resolveFolderId(data.parentFolderId);
+      ctx.log('Creating Google Doc from HTML', { name: data.name, parentId });
+
+      let tempDir: string | undefined;
+      try {
+        tempDir = await mkdtemp(join(tmpdir(), 'gdrive-mcp-html-'));
+        const tempPath = join(tempDir, 'content.html');
+        await writeFile(tempPath, data.htmlContent, 'utf8');
+
+        const file = await ctx.getDrive().files.create({
+          requestBody: {
+            name: data.name,
+            mimeType: 'application/vnd.google-apps.document',
+            parents: [parentId],
+          },
+          media: {
+            mimeType: 'text/html',
+            body: createReadStream(tempPath),
+          },
+          fields: 'id, name, mimeType, webViewLink',
+          supportsAllDrives: true,
+        });
+
+        ctx.log('Google Doc created from HTML', { id: file.data.id });
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              id: file.data.id,
+              name: file.data.name,
+              url: file.data.webViewLink,
+              mimeType: file.data.mimeType,
+            }, null, 2),
+          }],
+          isError: false,
+        };
+      } finally {
+        if (tempDir) {
+          await rm(tempDir, { recursive: true, force: true });
+        }
       }
     }
 

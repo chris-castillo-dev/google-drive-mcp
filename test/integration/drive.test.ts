@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after, beforeEach } from 'node:test';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
@@ -677,6 +678,98 @@ describe('Drive tools', () => {
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('createGoogleDocFromHtml', () => {
+    it('success — creates a Google Doc from HTML in root folder', async () => {
+      ctx.mocks.drive.service.files.create._setImpl(async ({ requestBody, media }: any) => ({
+        data: {
+          id: 'doc-abc',
+          name: requestBody.name,
+          mimeType: 'application/vnd.google-apps.document',
+          webViewLink: 'https://docs.google.com/document/d/doc-abc/edit',
+        },
+      }));
+
+      const res = await callTool(ctx.client, 'createGoogleDocFromHtml', {
+        name: 'My Report',
+        htmlContent: '<h1>Hello</h1><p>World</p>',
+      });
+
+      assert.equal(res.isError, false);
+      const parsed = JSON.parse(res.content[0].text);
+      assert.equal(parsed.id, 'doc-abc');
+      assert.equal(parsed.name, 'My Report');
+      assert.equal(parsed.url, 'https://docs.google.com/document/d/doc-abc/edit');
+      assert.equal(parsed.mimeType, 'application/vnd.google-apps.document');
+
+      const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
+      assert.equal(createCalls.length, 1);
+      const createArgs = createCalls[0].args[0];
+      assert.equal(createArgs.requestBody.mimeType, 'application/vnd.google-apps.document');
+      assert.equal(createArgs.media.mimeType, 'text/html');
+      assert.ok(createArgs.requestBody.parents.includes('root'));
+    });
+
+    it('success — uses parentFolderId when provided', async () => {
+      ctx.mocks.drive.service.files.create._setImpl(async ({ requestBody, media }: any) => ({
+        data: {
+          id: 'doc-abc',
+          name: requestBody.name,
+          mimeType: 'application/vnd.google-apps.document',
+          webViewLink: 'https://docs.google.com/document/d/doc-abc/edit',
+        },
+      }));
+
+      await callTool(ctx.client, 'createGoogleDocFromHtml', {
+        name: 'My Report',
+        htmlContent: '<h1>Hello</h1>',
+        parentFolderId: 'folder-123',
+      });
+
+      const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
+      const createArgs = createCalls[createCalls.length - 1].args[0];
+      assert.ok(createArgs.requestBody.parents.includes('folder-123'));
+    });
+
+    it('validation — empty name returns error', async () => {
+      const res = await callTool(ctx.client, 'createGoogleDocFromHtml', {
+        name: '',
+        htmlContent: '<h1>Hello</h1>',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('Name is required'));
+    });
+
+    it('validation — empty htmlContent returns error', async () => {
+      const res = await callTool(ctx.client, 'createGoogleDocFromHtml', {
+        name: 'My Report',
+        htmlContent: '',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('HTML content is required'));
+    });
+
+    it('temp file cleanup — no gdrive-mcp-html- dirs remain after tool call', async () => {
+      ctx.mocks.drive.service.files.create._setImpl(async ({ requestBody }: any) => ({
+        data: {
+          id: 'doc-abc',
+          name: requestBody.name,
+          mimeType: 'application/vnd.google-apps.document',
+          webViewLink: 'https://docs.google.com/document/d/doc-abc/edit',
+        },
+      }));
+
+      const before = readdirSync(tmpdir()).filter((e) => e.startsWith('gdrive-mcp-html-')).length;
+
+      await callTool(ctx.client, 'createGoogleDocFromHtml', {
+        name: 'Cleanup Test',
+        htmlContent: '<p>cleanup</p>',
+      });
+
+      const after = readdirSync(tmpdir()).filter((e) => e.startsWith('gdrive-mcp-html-')).length;
+      assert.equal(after, before, 'temp dirs should be cleaned up after tool call');
     });
   });
 });
